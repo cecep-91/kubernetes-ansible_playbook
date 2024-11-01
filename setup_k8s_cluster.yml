@@ -4,7 +4,7 @@
   vars:
     # kubernetes configurations
     k8s_minor_version: "{{ lookup('env', 'k8s_minor_version') }}"
-    daemon_json: "{{ lookup('env', 'daemon_json') | from_json }}"
+    insecure_registries: "{{ lookup('env', 'insecure_registries') }}"
     virtual_ip: "{{ lookup('env', 'virtual_ip') }}"
   tasks:
   #- ansible.builtin.include_role:
