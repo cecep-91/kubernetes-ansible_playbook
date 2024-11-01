@@ -1,0 +1,21 @@
+    - name: Reset failed docker
+      ansible.builtin.shell: systemctl reset-failed docker
+
+    - name: Start docker service
+      ansible.builtin.service: name=docker state=restarted enabled=yes
+
+    - name: Checking..
+      ansible.builtin.wait_for:
+        timeout: 3
+
+    - name: Docker status
+      ansible.builtin.shell: "systemctl status docker"
+      register: docker_status
+      failed_when: false
+      changed_when: false
+      
+    - ansible.builtin.debug: var=docker_status.stdout_lines
+    
+    - ansible.builtin.debug:
+        msg:
+          - "Docker is successfully installed"

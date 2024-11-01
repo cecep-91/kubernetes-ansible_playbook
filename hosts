@@ -1,0 +1,9 @@
+[all:vars]
+ansible_user=root
+ansible_password=
+
+[masters]
+10.100.1.71 hostname='master01-local.u22' role='master'
+10.100.1.72 hostname='master02-local.u22' role='master'
+10.100.1.73 hostname='master03-local.u22' role='master'
+[workers]

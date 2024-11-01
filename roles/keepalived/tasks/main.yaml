@@ -1,0 +1,62 @@
+- name: Install Keepalived for Ubuntu
+  when: ansible_os_family == "Debian"
+  ansible.builtin.apt:
+    name: keepalived
+    state: latest
+
+- name: Install Keepalived for Centos
+  when: ansible_os_family == "RedHat"
+  ansible.builtin.yum:
+    name: keepalived
+    state: latest
+
+- name: Enable modules needed for keepalived
+  shell: "modprobe {{ item }}"
+  loop:
+  - ip_vs
+  - ip_vs_rr
+  - ip_vs_wrr
+  - ip_vs_lc
+  - ip_vs_sh
+
+- name: Enable the module permanently
+  ansible.builtin.lineinfile:
+    path: /etc/modules
+    line: "{{ item }}"
+    state: present
+    create: true
+  loop:
+  - ip_vs
+  - ip_vs_rr
+  - ip_vs_wrr
+  - ip_vs_lc
+  - ip_vs_sh
+
+- name: Copy Keepalived configuration file
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+
+- name: Restart keepalived
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted
+    enabled: yes
+
+- name: Wait...
+  ansible.builtin.wait_for:
+    timeout: 3
+
+- ansible.builtin.shell: "systemctl status keepalived"
+  failed_when: false
+  changed_when: false
+  register: keepalived_status
+
+- ansible.builtin.shell: ip a | grep -e {{ ansible_default_ipv4.interface }}
+  failed_when: false
+  changed_when: false
+  register: ip_status
+
+- ansible.builtin.debug: var=keepalived_status.stdout_lines
+
+- ansible.builtin.debug: var=ip_status.stdout_lines

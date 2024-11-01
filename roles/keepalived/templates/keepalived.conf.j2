@@ -1,0 +1,15 @@
+vrrp_instance LB_VIP {
+    interface {{ ansible_default_ipv4.interface }}
+    state {% if groups['masters'][0] == ansible_default_ipv4.address %}MASTER{% else %}BACKUP{% endif %}
+    
+    priority {{ (ansible_play_hosts | length | int + 100) - (ansible_play_hosts_all.index(inventory_hostname) | int ) }}
+    virtual_router_id {{ virtual_ip | split('.') | last }} 
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        {{ virtual_ip }}
+    }
+}

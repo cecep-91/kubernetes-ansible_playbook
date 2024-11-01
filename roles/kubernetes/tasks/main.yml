@@ -1,0 +1,222 @@
+- name: Ensure swap is disabled
+  block:
+  - name: Disable swap memory
+    ansible.builtin.command: swapoff -a
+    changed_when: false
+
+  - name: Remove swap entries from /etc/fstab
+    ansible.builtin.replace:
+      path: /etc/fstab
+      regexp: '^(.*\sswap\s.*)'
+      replace: '# \1 (Commented out by Ansible)'
+
+  - name: Ensure swap remains disabled after reboot
+    ansible.builtin.lineinfile:
+      path: /etc/crontab
+      line: "@reboot root swapoff -a"
+      state: present
+
+- name: Set /etc/hosts and hostname
+  block:
+  - name: Add entries to /etc/hosts
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      line: "{{ hostvars[item]['ansible_default_ipv4']['address'] }} {{ hostvars[item]['hostname'] }}"
+      state: present
+      create: yes
+    with_items: "{{ ansible_play_hosts_all }}"
+
+  - name: Change the server's hostname
+    ansible.builtin.hostname:
+      name: "{{ hostname }}"
+
+- name: Add new Kubernetes repository for Ubuntu
+  when: ansible_os_family == "Debian"
+  block:
+  - name: Import Kubernetes GPG key
+    ansible.builtin.shell: >
+      {% if  k8s_minor_version | int < 24 %} curl -fsSL http://mirror.azure.cn/kubernetes/packages/apt/doc/apt-key.gpg | gpg --dearmor > /etc/apt/trusted.gpg.d/kubernetes.gpg {% else %} curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.{{  k8s_minor_version }}/deb/Release.key | gpg --dearmor > /etc/apt/keyrings/kubernetes-apt-keyring.gpg {% endif %}
+    register: gpg_key_import
+    retries: 10
+    delay: 10
+    until: gpg_key_import.rc == 0
+
+  - name: Ensure Kubernetes repository file is empty
+    ansible.builtin.file:
+      path: /etc/apt/sources.list.d/kubernetes.list
+      state: absent
+
+  - name: Add Kubernetes repository
+    ansible.builtin.lineinfile:
+      line: >
+        {% if  k8s_minor_version | int < 24 %} deb http://mirror.azure.cn/kubernetes/packages/apt/ kubernetes-xenial main {% else %} deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.{{  k8s_minor_version }}/deb/ / {% endif %}
+      path: /etc/apt/sources.list.d/kubernetes.list
+      state: present
+      create: true
+
+- name: Add new Kubernetes repository for CentOS
+  when: ansible_os_family == "RedHat"
+  block:
+  - name: Add Kubernetes repository for below version 24
+    ansible.builtin.yum_repository:
+      name: kubernetes
+      description: Kubernetes Repository
+      baseurl: http://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
+      enabled: yes
+      gpgcheck: no
+      gpgkey: http://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg
+    when: k8s_minor_version | int < 24
+
+  - name: Add Kubernetes repository for version 24 and above
+    ansible.builtin.yum_repository:
+      name: kubernetes
+      description: Kubernetes Repository
+      baseurl: https://pkgs.k8s.io/core:/stable:/v1.{{ k8s_minor_version }}/rpm/
+      enabled: yes
+      gpgcheck: no
+      gpgkey: https://pkgs.k8s.io/core:/stable:/v1.{{ k8s_minor_version }}/rpm/repodata/repomd.xml.key
+    when: k8s_minor_version | int >= 24
+
+- name: Install kubernetes packages for Ubuntu
+  when: ansible_os_family == "Debian"
+  block:
+  - name: Update apt cache
+    ansible.builtin.apt:
+      update_cache: true
+
+  - name: Install kubeadm kubelet kubectl
+    ansible.builtin.apt:
+      name: "{{ item }}=1.{{ k8s_minor_version }}*"
+      state: present
+      allow_downgrade: true
+    loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+  - name: If kubernetes version more than equal 24 for Ubuntu
+    when: k8s_minor_version | int >= 24
+    block:
+    - name: Install cri-dockerd
+      ansible.builtin.copy:
+        src: cri-dockerd
+        dest: /usr/local/bin/cri-dockerd
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Install cri-docker systemd files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /etc/systemd/system
+      loop:
+      - cri-docker.service
+      - cri-docker.socket
+
+    - name: Reload systemd and start cri-docker
+      ansible.builtin.systemd:
+        name: cri-docker
+        daemon_reload: yes
+        state: restarted
+        enabled: yes
+
+  - name: Hold kubeadm
+    ansible.builtin.dpkg_selections:
+      name: "{{ item }}"
+      selection: hold
+    loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+- name: Install Kubernetes for Centos
+  when: ansible_os_family == "RedHat"
+  block:
+  - name: Install kubeadm kubelet kubectl
+    ansible.builtin.yum:
+      name:
+      - "kubeadm-1.{{ k8s_minor_version }}.1-*"
+      - "kubelet-1.{{ k8s_minor_version }}.1-*"
+      - "kubectl-1.{{ k8s_minor_version }}.1-*"
+      - "kubernetes-cni-0.8.*"
+      - "nfs-utils"
+      - "iscsi-initiator-utils"
+      state: present
+      allow_downgrade: true
+
+  - name: If kubernetes version more than equal 24 for Ubuntu
+    when: k8s_minor_version | int >= 24
+    block:
+    - name: Install cri-dockerd
+      ansible.builtin.copy:
+        src: cri-dockerd
+        dest: /usr/local/bin/cri-dockerd
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Install cri-docker systemd files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /usr/lib/systemd/system/
+      loop:
+      - cri-docker.service
+      - cri-docker.socket
+
+    - name: Reload systemd and start cri-docker
+      ansible.builtin.systemd:
+        name: cri-docker
+        daemon_reload: yes
+        state: restarted
+        enabled: yes
+
+- name: Join kubernetes
+  block:
+  - name: Init cluster on the first master
+    shell: "kubeadm init --control-plane-endpoint {{ virtual_ip }}:6443 --upload-certs --pod-network-cidr=10.244.0.0/16{% if k8s_minor_version | int >= 24 %} --cri-socket=unix:///var/run/cri-dockerd.sock{% endif %}"
+    run_once: true
+    delegate_to: "{{ groups['masters'][0] }}"
+
+  - name: Deploy kube flannel cni
+    shell: "KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"
+    delegate_to: "{{ groups['masters'][0] }}"
+    ignore_errors: true
+    run_once: true
+
+  - name: Get join command
+    shell: kubeadm token create --print-join-command 2>/dev/null
+    run_once: true
+    register: join_command_raw
+    delegate_to: "{{ groups['masters'][0] }}"
+    retries: 3
+    delay: 10
+
+  - name: Get certificate
+    shell: kubeadm init phase upload-certs --upload-certs > /tmp/kubecert 2>/dev/null; cat /tmp/kubecert | tail -n1
+    run_once: true
+    register: certificate_raw
+    delegate_to: "{{ groups['masters'][0] }}"
+    retries: 3
+    delay: 10
+
+  - name: Joining cluster
+    shell: "{{ join_command_raw.stdout_lines.0 }}{% if role == 'master' or role=='control-plane' %} --control-plane --certificate-key {{ certificate_raw.stdout_lines.0 }}{% endif %}{% if k8s_minor_version | int >= 24 %} --cri-socket=unix:///var/run/cri-dockerd.sock{% endif %}"
+    when: groups['masters'][0] != ansible_default_ipv4.address
+    register: join_output
+    retries: 3
+    delay: 10
+
+  - ansible.builtin.debug:
+      var: join_output.stdout
+    when: groups['masters'][0] != ansible_default_ipv4.address
+
+  - name: Check node status
+    shell: "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get node -o wide | grep '{{ hostname }}'"
+    delegate_to: "{{ groups['masters'][0] }}"
+    ignore_errors: true
+    register: node_status
+    retries: 5
+    delay: 5
+
+  - ansible.builtin.debug:
+      var: node_status.stdout

@@ -1,0 +1,5 @@
+- ansible.builtin.include_tasks: install_docker.yaml
+
+- ansible.builtin.include_tasks: config_docker.yaml
+
+- ansible.builtin.include_tasks: start_docker.yaml

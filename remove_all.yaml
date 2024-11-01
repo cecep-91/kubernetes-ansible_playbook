@@ -1,0 +1,216 @@
+- name: Remove kubernetes
+  hosts: all
+  become: yes
+  gather_facts: true
+  tasks:
+  - name: Kubeadm reset
+    ansible.builtin.shell: echo y | kubeadm reset; echo y | kubeadm reset --cri-socket=unix:///var/run/cri-dockerd.sock
+    failed_when: false
+
+  - name: Stop kubelet service
+    service:
+      name: kubelet
+      state: stopped
+    ignore_errors: yes
+
+  - name: Stop all running containers
+    command: docker stop $(docker ps -aq)
+    ignore_errors: true
+
+  - name: Stop docker service
+    service:
+      name: docker
+      state: stopped
+    ignore_errors: yes
+
+  - name: Unhold kubeadm, kubelet, kubectl
+    when: ansible_os_family == "Debian"
+    ansible.builtin.dpkg_selections:
+      name: "{{ item }}"
+      selection: install
+    loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+    failed_when: false
+
+  - name: Uninstall kubeadm, kubelet, kubectl
+    when: ansible_os_family == "Debian"
+    ansible.builtin.apt:
+      name: "{{ item }}"
+      state: absent
+      purge: true
+    loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+  - name: Uninstall all kubernetes related packages
+    when: ansible_os_family == "Debian"
+    ansible.builtin.shell: apt purge -y kube* python3-kubernetes
+    failed_when: false
+
+  - name: Uninstall docker packages
+    when: ansible_os_family == "Debian"
+    ansible.builtin.shell: apt purge -y docker-engine docker docker.io docker-ce docker-ce-cli containerd containerd.io runc --allow-change-held-packages
+    failed_when: false
+
+  - name: Apt autoremove
+    when: ansible_os_family == "Debian"
+    ansible.builtin.apt:
+      autoremove: true
+      autoclean: true
+
+  - name: Get kubernetes http repository
+    when: ansible_os_family == "Debian"
+    ansible.builtin.shell: apt policy kubeadm 2>/dev/null| grep http | awk '{print $2}' | sort -r | head -n1
+    failed_when: false
+    register: k8s_repo
+
+  - name: Get kubernetes repository file path
+    when:
+    - k8s_repo.stdout_lines.0 is defined
+    - ansible_os_family == "Debian"
+    ansible.builtin.shell: "grep -r --include '*.list' '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d/ | grep {{ k8s_repo.stdout_lines.0 }} | awk -F: '{print $1}'"
+    failed_when: false
+    register: k8s_repo_path
+
+  - name: Remove kubernetes repository file path
+    when:
+    - k8s_repo_path.stdout_lines.0 is defined
+    - ansible_os_family == "Debian"
+    ansible.builtin.file:
+      path: "{{ k8s_repo_path.stdout_lines.0 }}"
+      state: absent
+
+  - name: Remove kubernetes related files
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+    - /etc/cni
+    - /etc/kubernetes
+    - /var/lib/dockershim
+    - /var/lib/etcd
+    - /var/lib/kubelet
+    - /var/lib/etcd2/
+    - /var/lib/cni/
+    - /var/lib/containerd
+    - /var/run/kubernetes
+    - /root/.kube/config
+    - /root/.kube/cache
+    - /var/lib/docker
+    - /etc/docker
+    - /var/run/docker.sock
+    - /etc/apparmor.d/docker
+
+  - name: Remove Kubernetes systemd services
+    when: ansible_os_family == "Debian"
+    file:
+      path: "/etc/systemd/system/{{ item }}"
+      state: absent
+    loop:
+    - kubelet.service
+    - kube-proxy.service
+    - etcd.service
+
+  # Uninstall kubeadm, kubelet, kubectl on CentOS
+  - name: Uninstall kubeadm, kubelet, kubectl
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.yum:
+      name: "{{ item }}"
+      state: absent
+    loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+  # Uninstall all Kubernetes related packages on CentOS
+  - name: Uninstall all Kubernetes related packages
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.shell: yum remove -y kube* python3-kubernetes
+    failed_when: false
+
+  # Uninstall Docker packages on CentOS
+  - name: Uninstall Docker packages
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.shell: yum remove -y docker docker-selinux docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    failed_when: false
+
+  # Cleanup orphaned packages on CentOS
+  - name: Yum autoremove
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.shell: yum autoremove -y
+
+  # Get Kubernetes repository URL on CentOS
+  - name: Get Kubernetes filepath
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.shell: yum repolist -v | grep -i "kubernetes" | grep -i filename | awk '{print $NF}'
+    failed_when: false
+    register: k8s_repo_path_centos
+
+  # Remove Kubernetes repository file path on CentOS
+  - name: Remove Kubernetes repository file path
+    when:
+    - k8s_repo_path_centos.stdout_lines | length > 0
+    - ansible_os_family == "RedHat"
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: absent
+    loop: "{{ k8s_repo_path_centos.stdout_lines }}"
+
+  # Remove Kubernetes related files on CentOS
+  - name: Remove Kubernetes related files
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+    - /etc/cni
+    - /etc/kubernetes
+    - /var/lib/dockershim
+    - /var/lib/etcd
+    - /var/lib/kubelet
+    - /var/lib/etcd2/
+    - /var/lib/cni/
+    - /var/lib/containerd
+    - /var/run/kubernetes
+    - /root/.kube/config
+    - /root/.kube/cache
+    - /var/lib/docker
+    - /etc/docker
+    - /var/run/docker.sock
+
+  # Remove Kubernetes systemd services on CentOS
+  - name: Remove Kubernetes systemd services
+    when: ansible_os_family == "RedHat"
+    ansible.builtin.file:
+      path: "/usr/lib/systemd/system/{{ item }}"
+      state: absent
+    loop:
+    - kubelet.service
+    - kube-proxy.service
+    - etcd.service
+
+  - name: Delete docker group
+    group:
+      name: docker
+      state: absent
+
+  - name: Flush iptables
+    shell: "{{ item }}"
+    loop:
+    - iptables -F && iptables -X
+    - iptables -t nat -F && iptables -t nat -X
+    - iptables -t raw -F && iptables -t raw -X
+    - iptables -t mangle -F && iptables -t mangle -X
+
+  - name: Delete CNI network interfaces
+    command: ip link delete {{ item }}
+    loop:
+    - cni0
+    - flannel.1
+    - docker0
+    ignore_errors: true
+
+  - ansible.builtin.debug:
+      msg: "Kubernetes successfully removed"
